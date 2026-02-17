@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import { fetchTrendingSoundsCreativeCenter } from "./creative-center";
 import { fetchTrendingSounds as fetchTikAPI } from "./tikapi";
 import { fetchTrendingSoundsApify } from "./apify-fallback";
 import { fetchOEmbedBatch } from "./oembed";
@@ -30,8 +31,9 @@ export async function collectTrendingSounds(): Promise<{
   let sounds: CollectedSound[] = [];
   let sourceUsed = "";
 
-  // Cascade: TikAPI → Apify
+  // Cascade: Creative Center (free) → TikAPI → Apify
   const sources = [
+    { name: "creative-center", fn: fetchTrendingSoundsCreativeCenter },
     { name: "tikapi", fn: fetchTikAPI },
     { name: "apify", fn: fetchTrendingSoundsApify },
   ];
