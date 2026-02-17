@@ -11,7 +11,7 @@ import {
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { SoundSnapshot } from "@/lib/types";
-import { format, parseISO } from "date-fns";
+import { format, parseISO, isValid } from "date-fns";
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -26,11 +26,13 @@ export function TrendChart({
   snapshots: SoundSnapshot[];
   title?: string;
 }) {
-  const data = snapshots.map((s) => ({
-    date: format(parseISO(s.snapshot_date), "MMM d"),
-    usage: s.usage_count,
-    rawDate: s.snapshot_date,
-  }));
+  const data = snapshots
+    .filter((s) => s.snapshot_date && isValid(parseISO(s.snapshot_date)))
+    .map((s) => ({
+      date: format(parseISO(s.snapshot_date), "MMM d"),
+      usage: s.usage_count,
+      rawDate: s.snapshot_date,
+    }));
 
   if (data.length === 0) {
     return (

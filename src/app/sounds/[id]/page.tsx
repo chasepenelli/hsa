@@ -21,7 +21,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { format, parseISO, formatDistanceToNow } from "date-fns";
+import { format, parseISO, formatDistanceToNow, isValid } from "date-fns";
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + "B";
@@ -99,14 +99,20 @@ export default function SoundDetailPage({
       : 0;
 
   // Rank history chart data
-  const rankData = sound.snapshots.map((s) => ({
-    date: format(parseISO(s.snapshot_date), "MMM d"),
-    rank: s.rank,
-  }));
+  const rankData = sound.snapshots
+    .filter((s) => s.snapshot_date && isValid(parseISO(s.snapshot_date)))
+    .map((s) => ({
+      date: format(parseISO(s.snapshot_date), "MMM d"),
+      rank: s.rank,
+    }));
 
-  const enrichedAgo = sound.enriched_at
-    ? formatDistanceToNow(new Date(sound.enriched_at), { addSuffix: true })
-    : null;
+  let enrichedAgo: string | null = null;
+  if (sound.enriched_at) {
+    const d = new Date(sound.enriched_at);
+    if (isValid(d)) {
+      enrichedAgo = formatDistanceToNow(d, { addSuffix: true });
+    }
+  }
 
   return (
     <main className="mx-auto max-w-5xl p-6 space-y-6">

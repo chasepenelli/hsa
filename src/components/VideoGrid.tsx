@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { VideoEmbed } from "./VideoEmbed";
 import type { ExampleVideo } from "@/lib/types";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, isValid } from "date-fns";
 
 function formatCount(n: number): string {
   if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + "B";
@@ -16,11 +16,13 @@ function formatCount(n: number): string {
 function VideoCard({ video }: { video: ExampleVideo }) {
   const [expanded, setExpanded] = useState(false);
 
-  const postedAgo = video.create_time
-    ? formatDistanceToNow(new Date(video.create_time * 1000), {
-        addSuffix: true,
-      })
-    : null;
+  let postedAgo: string | null = null;
+  if (video.create_time) {
+    const d = new Date(video.create_time * 1000);
+    if (isValid(d)) {
+      postedAgo = formatDistanceToNow(d, { addSuffix: true });
+    }
+  }
 
   return (
     <Card className="overflow-hidden bg-card/50">
