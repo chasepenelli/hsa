@@ -41,6 +41,7 @@ export async function GET(
 
     const result: SoundWithDetails = {
       ...(sound as Sound),
+      enriched_at: sound.enriched_at ?? null,
       snapshots: (snapshots ?? []) as SoundSnapshot[],
       example_videos: (exampleVideos ?? []) as ExampleVideo[],
       hashtags: (hashtagRows ?? []).map((h: { hashtag: string }) => h.hashtag),

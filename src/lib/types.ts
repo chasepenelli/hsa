@@ -34,6 +34,9 @@ export interface ExampleVideo {
   thumbnail_url: string | null;
   author_username: string | null;
   author_nickname: string | null;
+  author_avatar_url: string | null;
+  description: string | null;
+  create_time: number | null;
   views: number;
   likes: number;
   shares: number;
@@ -57,6 +60,7 @@ export interface CollectionLog {
 }
 
 export interface SoundWithDetails extends Sound {
+  enriched_at: string | null;
   snapshots: SoundSnapshot[];
   example_videos: ExampleVideo[];
   hashtags: string[];

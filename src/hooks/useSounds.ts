@@ -30,7 +30,7 @@ export function useSounds() {
 }
 
 export function useSoundDetail(id: string) {
-  const { data, error, isLoading } = useSWR<SoundWithDetails>(
+  const { data, error, isLoading, mutate } = useSWR<SoundWithDetails>(
     `/api/sounds/${id}`,
     fetcher,
     {
@@ -42,5 +42,6 @@ export function useSoundDetail(id: string) {
     sound: data ?? null,
     isLoading,
     isError: !!error,
+    mutate,
   };
 }
