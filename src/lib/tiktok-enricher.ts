@@ -41,6 +41,8 @@ export async function enrichSound(
     const slug = slugify(soundTitle);
     const url = `https://www.tiktok.com/music/${slug}-${soundId}`;
 
+    console.log(`[enricher] Fetching: ${url}`);
+
     const response = await fetch(url, {
       signal: AbortSignal.timeout(8000),
       headers: {
@@ -52,19 +54,26 @@ export async function enrichSound(
       },
     });
 
+    console.log(`[enricher] HTTP ${response.status}, content-type: ${response.headers.get("content-type")}`);
+
     if (!response.ok) {
       console.error(`[enricher] HTTP ${response.status} for ${url}`);
       return null;
     }
 
     const html = await response.text();
+    console.log(`[enricher] HTML length: ${html.length}`);
 
     // Extract the __UNIVERSAL_DATA_FOR_REHYDRATION__ JSON blob
     const marker = "__UNIVERSAL_DATA_FOR_REHYDRATION__";
+    const markerIdx = html.indexOf(marker);
+    console.log(`[enricher] Marker found: ${markerIdx !== -1} at pos ${markerIdx}`);
+
     const scriptRegex = new RegExp(
       `<script[^>]*id="${marker}"[^>]*>([\\s\\S]*?)</script>`
     );
     let match = scriptRegex.exec(html);
+    console.log(`[enricher] Script regex matched: ${!!match}`);
 
     if (!match) {
       // Fallback: look for the variable assignment pattern
@@ -72,10 +81,12 @@ export async function enrichSound(
         `window\\["${marker}"\\]\\s*=\\s*(\\{[\\s\\S]*?\\});?\\s*</script>`
       );
       match = varRegex.exec(html);
+      console.log(`[enricher] Var regex matched: ${!!match}`);
     }
 
     if (!match?.[1]) {
       console.error("[enricher] Could not find rehydration data in HTML");
+      console.error(`[enricher] HTML snippet: ${html.substring(Math.max(0, markerIdx - 50), markerIdx + 200).substring(0, 300)}`);
       return null;
     }
 
@@ -90,12 +101,15 @@ export async function enrichSound(
     // Navigate to the music detail data
     // The structure is typically: __DEFAULT_SCOPE__["webapp.music-detail"]
     const scope = data["__DEFAULT_SCOPE__"] as Record<string, unknown> | undefined;
+    console.log(`[enricher] Scope keys: ${scope ? Object.keys(scope).join(", ") : "null"}`);
     const musicDetail = scope?.["webapp.music-detail"] as Record<string, unknown> | undefined;
 
     if (!musicDetail) {
       console.error("[enricher] No webapp.music-detail found in data");
       return null;
     }
+
+    console.log(`[enricher] musicDetail keys: ${Object.keys(musicDetail).join(", ")}`);
 
     // Extract music info and stats
     const musicInfo = musicDetail.musicInfo as Record<string, unknown> | undefined;
