@@ -33,18 +33,67 @@ function extractHashtags(text: string): string[] {
   return matches.map((tag) => tag.slice(1).toLowerCase());
 }
 
-export async function enrichSound(
-  soundId: string,
-  soundTitle: string
-): Promise<EnrichmentResult | null> {
+/**
+ * Parse human-readable count like "266.5k" or "2.4M" into a number.
+ */
+function parseHumanCount(str: string): number {
+  const match = str.match(/([\d.]+)\s*([kKmMbB])?/);
+  if (!match) return 0;
+  const num = parseFloat(match[1]);
+  const suffix = (match[2] || "").toLowerCase();
+  if (suffix === "k") return Math.round(num * 1_000);
+  if (suffix === "m") return Math.round(num * 1_000_000);
+  if (suffix === "b") return Math.round(num * 1_000_000_000);
+  return Math.round(num);
+}
+
+/**
+ * Pass 1: Fetch OG meta tags using social bot UA.
+ * TikTok always serves these regardless of IP — gives us the real usage count.
+ */
+async function fetchOgMeta(
+  musicUrl: string
+): Promise<{ usage_count: number } | null> {
   try {
-    const slug = slugify(soundTitle);
-    const url = `https://www.tiktok.com/music/${slug}-${soundId}`;
+    const response = await fetch(musicUrl, {
+      signal: AbortSignal.timeout(5000),
+      headers: { "User-Agent": "facebookexternalhit/1.1" },
+    });
 
-    console.log(`[enricher] Fetching: ${url}`);
+    if (!response.ok) return null;
 
-    const response = await fetch(url, {
-      signal: AbortSignal.timeout(8000),
+    const html = await response.text();
+
+    // Extract og:description which contains "266.5k videos - Watch awesome..."
+    const descMatch = html.match(
+      /property="og:description"\s+content="([^"]*)"/
+    );
+    if (!descMatch?.[1]) return null;
+
+    const desc = descMatch[1];
+    // Parse "266.5k videos" pattern
+    const countMatch = desc.match(/^([\d.]+[kKmMbB]?)\s+videos/);
+    if (!countMatch?.[1]) return null;
+
+    const usage_count = parseHumanCount(countMatch[1]);
+    console.log(`[enricher] OG meta: ${countMatch[1]} → ${usage_count}`);
+    return { usage_count };
+  } catch (err) {
+    console.error("[enricher] OG meta fetch failed:", err);
+    return null;
+  }
+}
+
+/**
+ * Pass 2: Attempt full page scrape for video list and hashtags.
+ * This only works from non-datacenter IPs — gracefully returns null on failure.
+ */
+async function fetchFullPageData(
+  musicUrl: string
+): Promise<{ videos: EnrichedVideo[]; hashtags: string[] } | null> {
+  try {
+    const response = await fetch(musicUrl, {
+      signal: AbortSignal.timeout(7000),
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -54,71 +103,38 @@ export async function enrichSound(
       },
     });
 
-    console.log(`[enricher] HTTP ${response.status}, content-type: ${response.headers.get("content-type")}`);
-
-    if (!response.ok) {
-      console.error(`[enricher] HTTP ${response.status} for ${url}`);
-      return null;
-    }
+    if (!response.ok) return null;
 
     const html = await response.text();
-    console.log(`[enricher] HTML length: ${html.length}`);
 
-    // Extract the __UNIVERSAL_DATA_FOR_REHYDRATION__ JSON blob
+    // Extract rehydration JSON
     const marker = "__UNIVERSAL_DATA_FOR_REHYDRATION__";
-    const markerIdx = html.indexOf(marker);
-    console.log(`[enricher] Marker found: ${markerIdx !== -1} at pos ${markerIdx}`);
-
     const scriptRegex = new RegExp(
       `<script[^>]*id="${marker}"[^>]*>([\\s\\S]*?)</script>`
     );
-    let match = scriptRegex.exec(html);
-    console.log(`[enricher] Script regex matched: ${!!match}`);
-
-    if (!match) {
-      // Fallback: look for the variable assignment pattern
-      const varRegex = new RegExp(
-        `window\\["${marker}"\\]\\s*=\\s*(\\{[\\s\\S]*?\\});?\\s*</script>`
-      );
-      match = varRegex.exec(html);
-      console.log(`[enricher] Var regex matched: ${!!match}`);
-    }
-
-    if (!match?.[1]) {
-      console.error("[enricher] Could not find rehydration data in HTML");
-      console.error(`[enricher] HTML snippet: ${html.substring(Math.max(0, markerIdx - 50), markerIdx + 200).substring(0, 300)}`);
-      return null;
-    }
+    const match = scriptRegex.exec(html);
+    if (!match?.[1]) return null;
 
     let data: Record<string, unknown>;
     try {
       data = JSON.parse(match[1]);
     } catch {
-      console.error("[enricher] Failed to parse rehydration JSON");
       return null;
     }
 
-    // Navigate to the music detail data
-    // The structure is typically: __DEFAULT_SCOPE__["webapp.music-detail"]
-    const scope = data["__DEFAULT_SCOPE__"] as Record<string, unknown> | undefined;
-    console.log(`[enricher] Scope keys: ${scope ? Object.keys(scope).join(", ") : "null"}`);
-    const musicDetail = scope?.["webapp.music-detail"] as Record<string, unknown> | undefined;
+    const scope = data["__DEFAULT_SCOPE__"] as
+      | Record<string, unknown>
+      | undefined;
+    const musicDetail = scope?.["webapp.music-detail"] as
+      | Record<string, unknown>
+      | undefined;
 
     if (!musicDetail) {
-      console.error("[enricher] No webapp.music-detail found in data");
+      console.log("[enricher] Full page: no music-detail (datacenter IP block)");
       return null;
     }
 
-    console.log(`[enricher] musicDetail keys: ${Object.keys(musicDetail).join(", ")}`);
-
-    // Extract music info and stats
-    const musicInfo = musicDetail.musicInfo as Record<string, unknown> | undefined;
-    const stats = musicInfo?.stats as Record<string, number> | undefined;
-    const usage_count = stats?.videoCount ?? 0;
-
-    // Extract item list (top videos)
     const itemList = (musicDetail.itemList ?? []) as Record<string, unknown>[];
-
     const allHashtags = new Set<string>();
     const videos: EnrichedVideo[] = [];
 
@@ -127,7 +143,6 @@ export async function enrichSound(
       const desc = (item.desc as string) ?? "";
       const createTime = item.createTime as number | undefined;
 
-      // Extract author info
       const author = item.author as Record<string, unknown> | undefined;
       const authorUsername = (author?.uniqueId as string) ?? null;
       const authorNickname = (author?.nickname as string) ?? null;
@@ -136,14 +151,12 @@ export async function enrichSound(
         (author?.avatarThumb as string) ??
         null;
 
-      // Extract video stats
       const videoStats = item.stats as Record<string, number> | undefined;
       const views = videoStats?.playCount ?? 0;
       const likes = videoStats?.diggCount ?? videoStats?.heartCount ?? 0;
       const shares = videoStats?.shareCount ?? 0;
       const comments = videoStats?.commentCount ?? 0;
 
-      // Extract thumbnail
       const video = item.video as Record<string, unknown> | undefined;
       const cover =
         (video?.cover as string) ??
@@ -151,7 +164,6 @@ export async function enrichSound(
         (video?.originCover as string) ??
         null;
 
-      // Build video URL
       const video_url = videoId
         ? `https://www.tiktok.com/@${authorUsername ?? "user"}/video/${videoId}`
         : null;
@@ -172,25 +184,48 @@ export async function enrichSound(
         });
       }
 
-      // Extract hashtags from description
       for (const tag of extractHashtags(desc)) {
         allHashtags.add(tag);
       }
 
-      // Also check challenges/textExtra
       const textExtra = (item.textExtra ?? []) as Record<string, unknown>[];
       for (const te of textExtra) {
         const hashtagName = te.hashtagName as string | undefined;
-        if (hashtagName) {
-          allHashtags.add(hashtagName.toLowerCase());
-        }
+        if (hashtagName) allHashtags.add(hashtagName.toLowerCase());
       }
     }
 
+    return { videos, hashtags: Array.from(allHashtags) };
+  } catch {
+    return null;
+  }
+}
+
+export async function enrichSound(
+  soundId: string,
+  soundTitle: string
+): Promise<EnrichmentResult | null> {
+  try {
+    const slug = slugify(soundTitle);
+    const musicUrl = `https://www.tiktok.com/music/${slug}-${soundId}`;
+    console.log(`[enricher] Enriching: ${musicUrl}`);
+
+    // Pass 1: Get usage count from OG meta (always works)
+    // Pass 2: Try full page scrape for videos/hashtags (may fail on datacenter IPs)
+    const [ogResult, pageResult] = await Promise.all([
+      fetchOgMeta(musicUrl),
+      fetchFullPageData(musicUrl),
+    ]);
+
+    if (!ogResult) {
+      console.error("[enricher] OG meta fetch failed — no data available");
+      return null;
+    }
+
     return {
-      usage_count,
-      videos,
-      hashtags: Array.from(allHashtags),
+      usage_count: ogResult.usage_count,
+      videos: pageResult?.videos ?? [],
+      hashtags: pageResult?.hashtags ?? [],
     };
   } catch (err) {
     console.error("[enricher] Error:", err);
